@@ -25,7 +25,9 @@ class ConvBlock(nn.Module):
         super().__init__()
         self.outchannels = outchannels
         self.conv1 = nn.Conv2d(inchannels, outchannels, kernel_size=kernel_size, padding=padding)
+        self.conv1_bn = nn.BatchNorm2d(outchannels)
         self.conv2 = nn.Conv2d(outchannels, outchannels, kernel_size=kernel_size, padding=padding)
+        self.conv2_bn = nn.BatchNorm2d(outchannels)
         if dropout > 0:
             if spatial:
                 self.dropout = nn.Dropout2d(p=dropout)
@@ -33,9 +35,9 @@ class ConvBlock(nn.Module):
                 self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x):
-        x = F.elu(self.conv1(x))#F.relu(self.conv1(x))#
+        x = F.elu(self.conv1_bn(self.conv1(x)))#F.relu(self.conv1(x))#
         x = self.dropout(x)
-        x = F.elu(self.conv2(x))#F.relu(self.conv2(x))
+        x = F.elu(self.conv2_bn(self.conv2(x)))#F.relu(self.conv2(x))
         #x = self.dropout(x)
         return x
 
@@ -110,5 +112,5 @@ class Unet(nn.Module):
             x = layer(x, decoder_outputs.pop())
             #print(x.shape)
         #pdb.set_trace()
-        return self.seg_layer(x)
+        return F.sigmoid(self.seg_layer(x))
         

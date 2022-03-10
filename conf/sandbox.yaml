@@ -1,10 +1,10 @@
-device: 3 #cuda 0 1 2 3 cpu
+device: 0 #cuda 0 1 2 3 cpu
 data_dir: "/data/alex/original_torch"
 log_dir: "runs/" # "/data/alex/original_torch/runs/" # Not in Alex's original code
 class_name: "fx"
 batch_size: 19 # 24
-run_name: "jose_sigmoid"
-epochs: 201
+run_name: "sandbox"
+epochs: 1
 save_every: None
 use_channels: [0,1,2]
 loss_opts:
