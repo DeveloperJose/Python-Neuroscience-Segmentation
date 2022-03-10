@@ -1,0 +1,11 @@
+image_dir: "../../original_torch/train/images/"
+labels_dir: "../../original_torch/train/fx/"
+bias_dir: "../../original_torch/train/fx/"
+out_dir: "../../original_torch/processed/"
+window_size: [512,512]
+overlap: 384 #448
+filter: 0.01
+n_samples: 250
+
+test_image_dir: "../../original_torch/test/images/"
+test_labels_dir: "../../original_torch/test/fx/"
