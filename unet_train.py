@@ -4,15 +4,19 @@ Authors: Bibek Aryal, Alex Arnal, Jose Perez
 from segmentation.data.data import fetch_loaders
 from segmentation.model.frame import Framework
 import segmentation.model.functions as fn
+import keys
 
 import yaml, json, pathlib, warnings, pdb, torch, logging, time
 from torch.utils.tensorboard import SummaryWriter
 from addict import Dict
+from twilio.rest import Client
 import numpy as np
 
 warnings.filterwarnings("ignore")
 
 if __name__ == "__main__":
+    client = Client(keys.account_sid, keys.auth_token)
+
     conf = Dict(yaml.safe_load(open('./conf/unet_train.yaml')))
     data_dir = pathlib.Path(conf.data_dir)
     class_name = conf.class_name
@@ -21,6 +25,7 @@ if __name__ == "__main__":
     loaders = fetch_loaders(processed_dir, conf.batch_size, conf.use_channels)
     loss_fn = fn.get_loss(conf.model_opts.args.outchannels, conf.loss_opts)            
     log_dir = pathlib.Path(conf.log_dir) / run_name
+    early_stopping = conf.early_stopping
     frame = Framework(
         loss_fn = loss_fn,
         model_opts=conf.model_opts,
@@ -51,6 +56,8 @@ if __name__ == "__main__":
     fn.print_conf(conf)
     fn.log(logging.INFO, "# Training Instances = {}, # Validation Instances = {}".format(len(loaders["train"]), len(loaders["val"])))
     allValLosses = []
+    best_val_loss = np.inf
+    best_epoch = 0
     for epoch in range(conf.epochs):
         # train loop
         loss = {}
@@ -65,16 +72,12 @@ if __name__ == "__main__":
         fn.log_metrics(writer, val_metric, epoch+1, "val", conf.log_opts.mask_names)
         val_time = time.time() - start
 
-        if epoch % 5 == 0:
-            fn.log_images(writer, frame, loaders["train"], epoch, "train")
-            fn.log_images(writer, frame, loaders["val"], epoch, "val")
+        # if epoch % 5 == 0:
+        #     fn.log(logging.INFO, 'Logging images')
+        #     fn.log_images(writer, frame, loaders["train"], epoch, "train")
+        #     fn.log_images(writer, frame, loaders["val"], epoch, "val")
 
         writer.add_scalars("Loss", loss, epoch)
-        # Save model
-        # if epoch % conf.save_every == 0:
-        #     frame.save(out_dir, epoch)
-        # if conf.epochs - epoch <= 3:
-        #     frame.save(out_dir, epoch)
         if epoch > 0 and loss['val'] < min(allValLosses):
             frame.save(out_dir, "bestVal")
             print("\n\nSaving bestVal Model at epoch %s\n\n"%epoch)
@@ -83,5 +86,25 @@ if __name__ == "__main__":
         fn.print_metrics(conf, train_metric, val_metric)
         writer.flush()
 
+        # Early Stopping
+        if best_val_loss - loss["val"] > 0.000001:
+            best_val_loss = loss["val"]
+            best_epoch = epoch
+        else:
+            epochs_without_improving = epoch - best_epoch
+            if epochs_without_improving < early_stopping:
+                fn.log(logging.INFO, f'\tVal loss {loss["val"]} did not improve from {best_val_loss} | {best_val_loss - loss["val"]} | {epochs_without_improving} epochs without improvement | Patience remaining: {early_stopping-epochs_without_improving}')
+            else:
+                fn.log(logging.INFO, f'\tVal loss did not improve from {best_val_loss}, patience ran out so stopping early')
+                break
+
+    fn.log(logging.INFO, 'Saving final. Last val_time was {val_time}s')
     frame.save(out_dir, "final")
     writer.close()
+
+    #%% Send a text message via Twilio
+    client.messages.create(
+        body=f'{run_name} has completed with best val_loss {best_val_loss} in epoch {best_epoch} after {epoch+1} epochs | {val_metric}',
+        from_=keys.src_phone,
+        to=keys.dst_phone
+    )

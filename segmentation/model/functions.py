@@ -200,7 +200,9 @@ def get_loss(outchannels, opts=None):
                             outchannels=outchannels, masked = opts.masked)
     elif opts.name == "custom":
         loss_fn = customloss(act=torch.nn.Softmax(dim=1), w=loss_weight, 
-                            outchannels=outchannels, masked = opts.masked, sigma=sigma)                  
+                            outchannels=outchannels, masked = opts.masked, sigma=sigma)          
+    elif opts.name == "unified":
+        loss_fn = unified()        
     else:
         raise ValueError("Loss must be defined!")
     return loss_fn

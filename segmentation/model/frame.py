@@ -50,7 +50,8 @@ class Framework:
             decoder_channels=(2, 2, 2, 2), 
             in_channels=model_opts.args.inchannels, 
             classes=model_opts.args.outchannels,
-            aux_params=dict(dropout=0.1, classes=model_opts.args.outchannels, activation=None)
+            activation=None,
+            # aux_params=dict(dropout=0.1, classes=model_opts.args.outchannels, activation=None)
             ).to(self.device)
         
         optimizer_def = getattr(torch.optim, optimizer_opts["name"])

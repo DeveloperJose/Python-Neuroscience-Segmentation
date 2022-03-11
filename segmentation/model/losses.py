@@ -12,6 +12,61 @@ from torchvision.ops import sigmoid_focal_loss
 from scipy.ndimage import gaussian_filter
 #from torchvision.transforms.functional import gaussian_blur
 
+# https://github.com/mlyg/unified-focal-loss/blob/main/loss_functions.py
+class unified(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = 1
+        self.delta = 0.6
+        self.gamma = 0.5
+        self.act = torch.nn.Sigmoid()
+        self.label_smoothing = 0.1
+        self.outchannels = 2
+
+    def forward(self, pred, target):
+        # Label Smoothing
+        target = target * (1 - self.label_smoothing) + self.label_smoothing / self.outchannels
+
+        # Masking
+        mask = torch.sum(target, dim=1) == 1
+        pred = self.act(pred).permute(0,2,3,1)
+        target = target.permute(0,2,3,1)
+        pred = pred[mask]
+        target = target[mask]
+        
+        # Losses
+        asymmetric_ftl = self.asymmetric_focal_tversky_loss(pred, target)
+        asymmetric_fl = self.asymmetric_focal_loss(pred, target)
+
+        if self.weight is not None:
+            return (self.weight * asymmetric_ftl) + ((1-self.weight) * asymmetric_fl)  
+        else:
+            return asymmetric_ftl + asymmetric_fl
+
+    def asymmetric_focal_tversky_loss(self, y_pred: torch.Tensor, y_true: torch.Tensor):
+        epsilon = 1e-07
+        y_pred = y_pred.clip(epsilon, 1.0 - epsilon)
+
+        tp = (y_true * y_pred).sum(dim=0)
+        fn = (y_true * (1-y_pred)).sum(dim=0)
+        fp = ((1-y_true) * y_pred).sum(dim=0)
+        dice_class = (tp + epsilon)/(tp + self.delta*fn + (1-self.delta)*fp + epsilon)
+        back_dice = (1-dice_class[0]) 
+        fore_dice = (1-dice_class[1]) * torch.pow(1-dice_class[1], -self.gamma) 
+        return torch.stack([back_dice, fore_dice], -1).mean()
+
+    def asymmetric_focal_loss(self, y_pred, y_true):
+        epsilon = 1e-07
+        y_pred = y_pred.clip(epsilon, 1.0 - epsilon)
+
+        cross_entropy = -y_true * torch.log(y_pred)
+        back_ce = torch.pow(1 - y_pred[:,0], self.gamma) * cross_entropy[:,0]
+        back_ce =  (1 - self.delta) * back_ce
+
+        fore_ce = cross_entropy[:,1]
+        fore_ce = self.delta * fore_ce
+        return torch.stack([back_ce, fore_ce], -1).sum(-1).mean()
+
 class diceloss(torch.nn.Module):
     def __init__(self, act=torch.nn.Sigmoid(), smooth=1.0, w=[1.0], outchannels=1, label_smoothing=0, masked = False):
         super().__init__()
