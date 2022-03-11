@@ -112,5 +112,5 @@ class Unet(nn.Module):
             x = layer(x, decoder_outputs.pop())
             #print(x.shape)
         #pdb.set_trace()
-        return F.sigmoid(self.seg_layer(x))
+        return self.seg_layer(x)
         

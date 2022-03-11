@@ -19,6 +19,8 @@ import os, pdb, torch
 from pathlib import Path
 from torch.optim.lr_scheduler import ReduceLROnPlateau, ExponentialLR
 
+import segmentation_models_pytorch as smp
+
 class Framework:
     """
     Class to Wrap all the Training Steps
@@ -39,7 +41,18 @@ class Framework:
         self.multi_class = True if model_opts.args.outchannels > 1 else False
         self.num_classes = model_opts.args.outchannels    
         self.loss_fn = loss_fn.to(self.device)
-        self.model = Unet(**model_opts.args).to(self.device)
+        # self.model = Unet(**model_opts.args).to(self.device)
+        self.model = smp.MAnet(encoder_name='resnet18', 
+            encoder_depth=model_opts.args.net_depth, 
+            encoder_weights=None, 
+            decoder_use_batchnorm=True,
+            # decoder_attention_type=None,
+            decoder_channels=(2, 2, 2, 2), 
+            in_channels=model_opts.args.inchannels, 
+            classes=model_opts.args.outchannels,
+            aux_params=dict(dropout=0.1, classes=model_opts.args.outchannels, activation=None)
+            ).to(self.device)
+        
         optimizer_def = getattr(torch.optim, optimizer_opts["name"])
         self.optimizer = optimizer_def(self.model.parameters(), **optimizer_opts["args"])
         self.lrscheduler = ReduceLROnPlateau(self.optimizer, "min",
