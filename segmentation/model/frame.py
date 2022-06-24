@@ -13,6 +13,7 @@ training step can be concisely called with a single method.
 from .unet import *
 from .metrics import *
 
+from timeit import default_timer as timer
 import torch.nn.functional as F
 import numpy as np
 import os, pdb, torch
@@ -27,6 +28,32 @@ class Framework:
 
     """
 
+    # def __init__(self, model, loss_fn, opt, conf):
+    #     self.model = model
+    #     self.loss_fn = loss_fn
+    #     self.optimizer = opt
+
+    #     # Helpful variables
+    #     self.multi_class = True if conf.model_opts.args.outchannels > 1 else False
+    #     self.num_classes = conf.model_opts.args.outchannels   
+
+    #     # Initialize CUDA
+    #     self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #     if torch.cuda.device_count() > 1:
+    #         self.model = nn.DataParallel(self.model)
+        
+    #     self.model = self.model.to(self.device)
+    #     self.loss_fn = self.loss_fn.to(self.device)
+        
+    #     # Scheduler. I disabled this for hyperparameter tuning
+    #     # self.lrscheduler = ReduceLROnPlateau(self.optimizer, 
+    #     #                                     "min",
+    #     #                                      verbose = True, 
+    #     #                                      patience = 4,
+    #     #                                      factor = 0.75,
+    #     #                                      min_lr = 1e-9)
+
+    # Regular Framework Init
     def __init__(self, loss_fn, model_opts=None, optimizer_opts=None,
                  reg_opts=None, device=None):
         """
@@ -47,6 +74,7 @@ class Framework:
             encoder_weights=None, 
             decoder_use_batchnorm=True,
             # decoder_attention_type=None,
+            # decoder_pab_channels=64,
             decoder_channels=(2, 2, 2, 2), 
             in_channels=model_opts.args.inchannels, 
             classes=model_opts.args.outchannels,
@@ -80,16 +108,22 @@ class Framework:
         x = x.permute(0, 3, 1, 2).to(self.device)
         y = y.permute(0, 3, 1, 2).to(self.device)
 
+        start_time = timer()
         y_hat = self.model(x)
-        
+        print(f'\t{timer()-start_time:.5f}s for model')
+
+        start_time = timer()
         loss = self.calc_loss(y_hat, y)
+        print(f'\t{timer()-start_time:.5f}s for loss')
+
+        start_time = timer()
         loss.backward()
+        print(f'\t{timer()-start_time:.5f}s for backward')
         return y_hat.permute(0, 2, 3, 1), loss
     
     def zero_grad(self):
         self.optimizer.step()
         self.optimizer.zero_grad()
-
 
     def val_operations(self, val_loss):
         """
@@ -137,16 +171,6 @@ class Framework:
         y_hat = y_hat.to(self.device)
         y = y.to(self.device)
         loss = self.loss_fn(y_hat, y)
-        '''if self.reg_opts:
-            for reg_type in self.reg_opts.keys():
-                reg_fun = globals()[reg_type]
-                penalty = reg_fun(
-                    self.model.parameters(),
-                    self.reg_opts[reg_type],
-                    self.device
-                )
-                loss += penalty'''
-
         return loss
 
 
@@ -161,19 +185,18 @@ class Framework:
             results
 
         """
-        y_hat = y_hat.to(self.device)
-        y = y.to(self.device)
-        n_classes = y.shape[3]
 
         if masked:
             mask = torch.sum(y, dim=3) == 0
-
-        y_hat = np.argmax(y_hat.cpu().numpy(), axis=3)+1
-        y = np.argmax(y.cpu().numpy(), axis=3)+1
-
-        if masked:
             y_hat[mask] = 0
             y[mask] = 0
+
+        y_hat = y_hat.to(self.device)
+        y = y.to(self.device)
+        n_classes = y.shape[3]
+        
+        y_hat = np.argmax(y_hat.cpu().numpy(), axis=3)+1
+        y = np.argmax(y.cpu().numpy(), axis=3)+1
         
         tp, fp, fn = torch.zeros(n_classes), torch.zeros(n_classes), torch.zeros(n_classes)
         for i in range(n_classes):

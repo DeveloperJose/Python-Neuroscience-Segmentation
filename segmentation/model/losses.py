@@ -7,36 +7,175 @@ Created on Thurs Sep 30 21:42:33 2021
 
 metrics
 """
+import cv2
+import numpy as np
 import torch, pdb
-from torchvision.ops import sigmoid_focal_loss
+# from torchvision.ops import sigmoid_focal_loss
 from scipy.ndimage import gaussian_filter
+from timeit import default_timer as timer
+from numba import jit, njit
+from nnMorpho import operations
 #from torchvision.transforms.functional import gaussian_blur
 
+# https://github.com/mlyg/boundary-uncertainty/blob/main/loss_functions.py
+# def border_uncertainty(seg: np.ndarray, alpha=0.9, beta=0.1):
+#     res = np.zeros_like(seg)
+#     check_seg = seg.astype(np.bool)
+#     if check_seg.any():
+#         kernel = np.ones((3,3),np.uint8)
+#         im_erode = cv2.erode(seg[:, 1],kernel,iterations = 1)
+#         im_dilate = cv2.dilate(seg[:, 1],kernel,iterations = 1)
+#         # compute inner border and adjust certainty with alpha parameter
+#         inner = seg[:, 1] - im_erode
+#         inner = alpha * inner
+#         # compute outer border and adjust certainty with beta parameter
+#         outer = im_dilate - seg[:,1]
+#         outer = beta * outer
+#         # combine adjusted borders together with unadjusted image
+#         combined = inner + outer + im_erode
+#         combined = np.expand_dims(combined,axis=-1)
+
+#         res = np.concatenate([1-combined, combined],axis=-1)
+
+#         return res
+#     else:
+#         return res
+
+# # @torch.jit.script
+# def border_uncertainty_batch(y_true):
+#     return np.array([border_uncertainty(y.cpu().numpy()) for y in y_true]).astype(np.float32)
+
+# @njit(parallel=True)
+@torch.jit.script
+def compute_res(seg, im_erode, im_dilate, alpha, beta):
+    # compute inner border and adjust certainty with alpha parameter
+    inner = seg - im_erode
+    inner = alpha * inner
+    # compute outer border and adjust certainty with beta parameter
+    outer = im_dilate - seg
+    outer = beta * outer
+    # combine adjusted borders together with unadjusted image
+    res = inner + outer + im_erode
+    return res
+
+accumulated_res = 0
+accumulated_res_idx = 0
+# Function to calculate boundary uncertainty
+def border_uncertainty_sigmoid(seg: torch.Tensor, alpha = 0.9, beta = 0.9):
+    global accumulated_res, accumulated_res_idx
+    """
+    Parameters
+    ----------
+    alpha : float, optional
+        controls certainty of ground truth inner borders, by default 0.9.
+        Higher values more appropriate when over-segmentation is a concern
+    beta : float, optional
+        controls certainty of ground truth outer borders, by default 0.1
+        Higher values more appropriate when under-segmentation is a concern
+    """
+    # start_time = timer()
+    # res = np.zeros_like(seg)
+    # check_seg = seg.astype(np.bool)
+    # seg = np.squeeze(seg)
+
+    res = torch.zeros_like(seg)
+    check_seg = seg.to(torch.bool)
+    seg = seg.squeeze()
+
+    if check_seg.any():
+        # kernel = np.ones((3,3),np.uint8)
+        kernel = torch.ones((3, 3), torch.uint8)
+        # im_erode = cv2.erode(seg,kernel,iterations = 1)
+        # im_dilate = cv2.dilate(seg,kernel,iterations = 1)
+        start_time = timer()
+        im_erode = operations.erosion(seg, kernel)
+        im_dilate = operations.dilation(seg, kernel)
+
+        accumulated_res += timer()-start_time
+        accumulated_res_idx += 1
+        
+        res = compute_res(seg, im_erode, im_dilate, alpha, beta)
+
+        # print(f'{timer()-start_time:.5f}s for p1')
+        # res = np.expand_dims(res,axis=-1)
+
+        return res
+    else:
+        return res
+
+# Enables batch processing of boundary uncertainty
+# def border_uncertainty_sigmoid_batch(y_true):
+#     return torch.from_numpy(np.array([border_uncertainty_sigmoid(y.cpu().numpy()) for y in y_true]).astype(np.float32))
+
 # https://github.com/mlyg/unified-focal-loss/blob/main/loss_functions.py
-class unified(torch.nn.Module):
-    def __init__(self):
+# For later https://github.com/LIVIAETS/boundary-loss
+class unifiedloss(torch.nn.Module):
+    def __init__(self, weight=1, delta=0.6, gamma=0.5, act=torch.nn.Sigmoid(), label_smoothing=0.1, outchannels=2, boundary=True):
         super().__init__()
-        self.weight = 1
-        self.delta = 0.6
-        self.gamma = 0.5
-        self.act = torch.nn.Sigmoid()
-        self.label_smoothing = 0.1
-        self.outchannels = 2
+        '''
+        weight: float, optional represents lambda parameter and controls weight given to asymmetric Focal Tversky loss and asymmetric Focal loss, by default 0.5
+        delta : float, optional controls weight given to each class, by default 0.6
+        gamma : float, optional focal parameter controls the degree of background suppression and foreground enhancement, by default 0.5
+        '''
+        self.weight = weight
+        self.delta = delta
+        self.gamma = gamma
+        self.act = act
+        self.label_smoothing = label_smoothing
+        self.outchannels = outchannels
+        self.boundary = boundary
 
     def forward(self, pred, target):
+        if self.boundary:
+            global accumulated_res_idx, accumulated_res
+            device = target.device
+            # Convert batch to np
+            accumulated_res_idx = 0
+            accumulated_res = 0
+
+            start_time = timer()
+            target_np = target.permute(0, 2, 3, 1)
+            print(f'\t\t{timer()-start_time:.5f}s for boundary')
+
+            # start_time = timer()
+            # target_np = target_np.cpu().numpy()
+            # print(f'\t\t{timer()-start_time:.5f}s for cpu numpy')
+            
+            start_time = timer()
+            target = [border_uncertainty_sigmoid(y_true) for y_true in target_np]
+            print(f'\t\t{timer()-start_time:.5f}s for list comprehension')
+
+            start_time = timer()
+            target = np.array(target)
+            print(f'\t\t{timer()-start_time:.5f}s for np.array(target)')
+
+            start_time = timer()
+            target = torch.from_numpy(target).to(device).permute(0, 3, 1, 2)
+            print(f'\t\t{timer()-start_time:.5f}s for last step')
+            print(f'\t\t\t{accumulated_res/accumulated_res_idx:.5f}s for compute_res')
+
         # Label Smoothing
+        start_time = timer()
         target = target * (1 - self.label_smoothing) + self.label_smoothing / self.outchannels
+        print(f'\t\t{timer()-start_time:.5f}s for smoothing')
 
         # Masking
+        start_time = timer()
         mask = torch.sum(target, dim=1) == 1
         pred = self.act(pred).permute(0,2,3,1)
         target = target.permute(0,2,3,1)
         pred = pred[mask]
         target = target[mask]
+        print(f'\t\t{timer()-start_time:.5f}s for masking')
         
         # Losses
+        start_time = timer()
         asymmetric_ftl = self.asymmetric_focal_tversky_loss(pred, target)
+        print(f'\t\t{timer()-start_time:.5f}s for tversky')
+
+        start_time = timer()
         asymmetric_fl = self.asymmetric_focal_loss(pred, target)
+        print(f'\t\t{timer()-start_time:.5f}s for focal')
 
         if self.weight is not None:
             return (self.weight * asymmetric_ftl) + ((1-self.weight) * asymmetric_fl)  
@@ -201,13 +340,13 @@ class senseloss(torch.nn.Module):
         return iou.sum()
 
 
-class focalloss(torch.nn.modules.loss._WeightedLoss):
-    def __init__(self, act=torch.nn.Sigmoid(), smooth=1.0, w=[1.0], outchannels=1, label_smoothing=0, masked = False, gamma=2):
-        super().__init__()
+# class focalloss(torch.nn.modules.loss._WeightedLoss):
+#     def __init__(self, act=torch.nn.Sigmoid(), smooth=1.0, w=[1.0], outchannels=1, label_smoothing=0, masked = False, gamma=2):
+#         super().__init__()
 
-    def forward(self, pred, target):
-        focal_loss = sigmoid_focal_loss(pred, target, alpha = -1, gamma = 2, reduction = "mean")
-        return focal_loss
+#     def forward(self, pred, target):
+#         focal_loss = sigmoid_focal_loss(pred, target, alpha = -1, gamma = 2, reduction = "mean")
+#         return focal_loss
 
 
 class customloss(torch.nn.modules.loss._WeightedLoss):

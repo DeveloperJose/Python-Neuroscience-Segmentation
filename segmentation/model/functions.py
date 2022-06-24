@@ -13,6 +13,11 @@ from .metrics import *
 import logging, datetime, pdb, torch
 from torchvision.utils import make_grid
 from segmentation.model.losses import *
+from timeit import default_timer as timer
+
+# Disable TQDM for hyperparameter tuning
+from functools import partialmethod
+# tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 
 LOGGER = logging.getLogger()
 LOGGER.setLevel(logging.INFO)
@@ -51,25 +56,39 @@ def train_epoch(epoch, loader, frame, conf):
     :return (train_loss, metrics): A tuple containing the average epoch loss
       and the metrics on the training set.
     """
-    metrics_opts, masked, n_classes, grad_accumulation_steps = conf.metrics_opts, conf.loss_masked, len(conf.log_opts.mask_names), conf.grad_accumulation_steps
+    metrics_opts=conf.metrics_opts
+    masked = conf.loss_opts.masked
+    n_classes = len(conf.log_opts.mask_names)
+    grad_accumulation_steps = conf.grad_accumulation_steps
     loss, batch_loss, tp, fp, fn = 0, 0, torch.zeros(n_classes), torch.zeros(n_classes), torch.zeros(n_classes)
     train_iterator = tqdm(loader, desc="Train Iter (Epoch=X Steps=X loss=X.XXX lr=X.XXXXXXX)")
     for i, (x,y) in enumerate(train_iterator):
+        start_time = timer()
         y_hat, _loss = frame.optimize(x, y)
+        print(f'{timer()-start_time:.5f}s for optimize')
         if grad_accumulation_steps != "None":
             if (i+1) % grad_accumulation_steps == 0:
                 frame.zero_grad()
         else:
             frame.zero_grad()
         loss += _loss.item()
+        start_time = timer()
         y_hat = frame.segment(y_hat)
+        print(f'{timer()-start_time:.5f}s for segment')
+        start_time = timer()
         _tp, _fp, _fn = frame.metrics(y_hat, y, masked)
+        print(f'{timer()-start_time:.5f}s for metrics')
+
+        start_time = timer()
         tp += _tp
         fp += _fp 
         fn += _fn 
+        print(f'{timer()-start_time:.5f}s for adds')
         train_iterator.set_description("Train, Epoch=%d Steps=%d Loss=%5.3f Avg_Loss=%5.3f " %(epoch, i, _loss.item(), loss/(i+1)))
     frame.zero_grad()
+    start_time = timer()
     metrics = get_metrics(tp, fp, fn, metrics_opts)
+    print(f'{timer()-start_time:.5f}s for get_metrics')
     return loss / len(loader.dataset), metrics
 
 
@@ -92,7 +111,10 @@ def validate(epoch, loader, frame, conf):
     :return (val_loss, metrics): A tuple containing the average validation loss
       and the metrics on the validation set.
     """
-    metrics_opts, masked, n_classes = conf.metrics_opts, conf.loss_masked, len(conf.log_opts.mask_names)
+    metrics_opts=conf.metrics_opts
+    masked = conf.loss_opts.masked
+    n_classes = len(conf.log_opts.mask_names)
+    grad_accumulation_steps = conf.grad_accumulation_steps
     loss, tp, fp, fn = 0, torch.zeros(n_classes), torch.zeros(n_classes), torch.zeros(n_classes)
     val_iterator = tqdm(loader, desc="Val Iter (Epoch=X Steps=X loss=X.XXX lr=X.XXXXXXX)")
     channel_first = lambda x: x.permute(0, 3, 1, 2)
@@ -200,9 +222,9 @@ def get_loss(outchannels, opts=None):
                             outchannels=outchannels, masked = opts.masked)
     elif opts.name == "custom":
         loss_fn = customloss(act=torch.nn.Softmax(dim=1), w=loss_weight, 
-                            outchannels=outchannels, masked = opts.masked, sigma=sigma)          
-    elif opts.name == "unified":
-        loss_fn = unified()        
+                            outchannels=outchannels, masked = opts.masked, sigma=sigma)
+    elif opts.name == 'unified':
+        loss_fn = unifiedloss(outchannels=outchannels)   
     else:
         raise ValueError("Loss must be defined!")
     return loss_fn

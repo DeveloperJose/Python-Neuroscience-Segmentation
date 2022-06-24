@@ -1,0 +1,2 @@
+val_loss,val_iou,time_this_iter_s,should_checkpoint,done,timesteps_total,episodes_total,training_iteration,trial_id,experiment_id,date,timestamp,time_total_s,pid,hostname,node_ip,time_since_restore,timesteps_since_restore,iterations_since_restore
+0.01484446144104004,tensor(0.1414),75.47703528404236,True,True,,,1,52990_00442,8cc375464a2b477797d00ca6aa9122f8,2022-03-13_19-57-00,1647223020,75.47703528404236,3950070,frodo,129.108.18.90,75.47703528404236,0,1

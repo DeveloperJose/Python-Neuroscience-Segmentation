@@ -13,7 +13,6 @@ from twilio.rest import Client
 import numpy as np
 
 warnings.filterwarnings("ignore")
-
 if __name__ == "__main__":
     client = Client(keys.account_sid, keys.auth_token)
 
@@ -56,8 +55,10 @@ if __name__ == "__main__":
     fn.print_conf(conf)
     fn.log(logging.INFO, "# Training Instances = {}, # Validation Instances = {}".format(len(loaders["train"]), len(loaders["val"])))
     allValLosses = []
-    best_val_loss = np.inf
+    # best_val_loss = np.inf
+    best_val_iou = 0
     best_epoch = 0
+    best_metrics = None
     for epoch in range(conf.epochs):
         # train loop
         loss = {}
@@ -70,6 +71,7 @@ if __name__ == "__main__":
         start = time.time()
         loss["val"], val_metric = fn.validate(epoch, loaders["val"], frame, conf)
         fn.log_metrics(writer, val_metric, epoch+1, "val", conf.log_opts.mask_names)
+        val_iou = val_metric['IoU'][1].item()
         val_time = time.time() - start
 
         # if epoch % 5 == 0:
@@ -87,24 +89,26 @@ if __name__ == "__main__":
         writer.flush()
 
         # Early Stopping
-        if best_val_loss - loss["val"] > 0.000001:
-            best_val_loss = loss["val"]
+        diff = val_iou - best_val_iou
+        if diff > 0.001:
+            best_val_iou = val_iou
             best_epoch = epoch
+            best_metrics = [train_metric, val_metric]
         else:
             epochs_without_improving = epoch - best_epoch
             if epochs_without_improving < early_stopping:
-                fn.log(logging.INFO, f'\tVal loss {loss["val"]} did not improve from {best_val_loss} | {best_val_loss - loss["val"]} | {epochs_without_improving} epochs without improvement | Patience remaining: {early_stopping-epochs_without_improving}')
+                fn.log(logging.INFO, f'\tVal iou {val_iou:.4f} did not improve from {best_val_iou:.4f} | {diff:.4f} | {epochs_without_improving} epochs without improvement | Patience remaining: {early_stopping-epochs_without_improving}')
             else:
-                fn.log(logging.INFO, f'\tVal loss did not improve from {best_val_loss}, patience ran out so stopping early')
+                fn.log(logging.INFO, f'\tVal iou {val_iou:.4f} did not improve from {best_val_iou:.4f}, patience ran out so stopping early')
                 break
 
-    fn.log(logging.INFO, 'Saving final. Last val_time was {val_time}s')
+    fn.log(logging.INFO, f'Saving final. Last val_time was {val_time}s')
     frame.save(out_dir, "final")
     writer.close()
 
     #%% Send a text message via Twilio
     client.messages.create(
-        body=f'{run_name} has completed with best val_loss {best_val_loss} in epoch {best_epoch} after {epoch+1} epochs | {val_metric}',
+        body=f'{run_name} has completed with best val_iou {best_val_iou} in epoch {best_epoch} after {epoch+1} epochs | {best_metrics}',
         from_=keys.src_phone,
         to=keys.dst_phone
     )
